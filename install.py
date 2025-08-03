@@ -1,24 +1,27 @@
-import requests
 import os
+import subprocess
+import sys
+import urllib.request
 
-RAW_URL = "https://raw.githubusercontent.com/OftenNotKnown/SimplicIDLE.github.io/main/main.py"
-OUTPUT_FILE = "main.py"
+# Optional: requirements (add more if needed)
+required = []
 
-def download_file(url, output):
-    print(f"📥 Downloading {output}...")
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open(output, 'wb') as f:
-            f.write(response.content)
-        print(f"✅ Saved as {output}")
-    else:
-        print(f"❌ Failed to download file. Status code: {response.status_code}")
-        exit(1)
+def install_requirements():
+    for package in required:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-def run_file(filename):
-    print(f"🚀 Running {filename}...")
-    os.system(f'python "{filename}"')
+def download_main():
+    url = "https://raw.githubusercontent.com/OftenNotKnown/SimplicIDLE/main/main.py"
+    file_name = "main.py"
+    print("Downloading main.py from GitHub...")
+    urllib.request.urlretrieve(url, file_name)
+    print("Download complete.")
+
+def run_main():
+    print("Running main.py...")
+    os.system(f"{sys.executable} main.py")
 
 if __name__ == "__main__":
-    download_file(RAW_URL, OUTPUT_FILE)
-    run_file(OUTPUT_FILE)
+    install_requirements()
+    download_main()
+    run_main()
