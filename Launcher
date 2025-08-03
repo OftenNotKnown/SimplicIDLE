@@ -1,0 +1,26 @@
+import requests
+import os
+
+# 🔗 Link to the raw file on GitHub (change this!)
+RAW_URL = "https://raw.githubusercontent.com/YourUsername/YourRepo/main/your_app.py"
+OUTPUT_FILE = "your_app.py"
+
+def download_file(url, output):
+    print(f"Downloading from {url}...")
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open(output, 'wb') as f:
+            f.write(response.content)
+        print(f"Saved as {output}")
+    else:
+        print(f"Failed to download file. Status code: {response.status_code}")
+        exit(1)
+
+def run_file(filename):
+    print(f"Running {filename}...")
+    os.system(f'python "{filename}"')
+
+if __name__ == "__main__":
+    download_file(RAW_URL, OUTPUT_FILE)
+    # Optional: Automatically run it
+    run_file(OUTPUT_FILE)
