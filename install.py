@@ -1,7 +1,7 @@
 import requests
 import os
 
-RAW_URL = "https://raw.githubusercontent.com/OftenNotKnown/OftenNotKnown.github.io/main/main.py"
+RAW_URL = "https://raw.githubusercontent.com/OftenNotKnown/SimplicIDLE.github.io/main/main.py"
 OUTPUT_FILE = "main.py"
 
 def download_file(url, output):
