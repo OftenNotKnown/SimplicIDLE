@@ -1,23 +1,22 @@
 import requests
 import os
 
-# ✅ Raw GitHub URL to main.py
 RAW_URL = "https://raw.githubusercontent.com/OftenNotKnown/OftenNotKnown.github.io/main/main.py"
 OUTPUT_FILE = "main.py"
 
 def download_file(url, output):
-    print(f"Downloading {output}...")
+    print(f"📥 Downloading {output}...")
     response = requests.get(url)
     if response.status_code == 200:
         with open(output, 'wb') as f:
             f.write(response.content)
-        print(f"Saved as {output}")
+        print(f"✅ Saved as {output}")
     else:
-        print(f"Failed to download file. Status code: {response.status_code}")
+        print(f"❌ Failed to download file. Status code: {response.status_code}")
         exit(1)
 
 def run_file(filename):
-    print(f"Running {filename}...")
+    print(f"🚀 Running {filename}...")
     os.system(f'python "{filename}"')
 
 if __name__ == "__main__":
