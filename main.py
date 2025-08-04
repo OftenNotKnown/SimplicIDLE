@@ -1,345 +1,381 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-import os, shutil, json, types, io, sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECTS_DIR = os.path.join(BASE_DIR, "projects")
-SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
-os.makedirs(PROJECTS_DIR, exist_ok=True)
+import shutil
+import sys
+import os
+import subprocess
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QPushButton, QLineEdit, QFileSystemModel, QTreeView, QFileDialog, QDialog, QComboBox,
+    QCheckBox, QDialogButtonBox, QMenu, QAction, QInputDialog, QStackedLayout, QMessageBox, QTextEdit, QTabWidget, QSplitter
+)
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QFont, QIcon
 
-default_settings = {
-    "theme": "Dark",
-    "font_size": 12,
-    "auto_save_on_run": True,
-    "default_run_file": "",
-    "sdk_path": ""
-}
 
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                return json.load(f)
-        except:
-            return default_settings.copy()
-    return default_settings.copy()
-
-def save_settings(settings):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=4)
-
-class RedirectStdout(io.StringIO):
-    def __init__(self, widget):
+class ProjectEditor(QWidget):
+    def __init__(self, path, theme="dark"):
         super().__init__()
-        self.widget = widget
-    def write(self, s):
-        self.widget.insert(tk.END, s)
-        self.widget.see(tk.END)
-    def flush(self): pass
+        self.project_path = path
+        self.theme = theme
+        self.open_tabs = {}
+        self.init_ui()
 
-class AndroidStudioLikeIDE:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Python Android IDE")
-        self.root.geometry("1300x750")
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        toolbar = QHBoxLayout()
+        for icon, label in [("▶️", "Run"), ("🔧", "Build"), ("💾", "Save"), ("🐞", "Debug")]:
+            btn = QPushButton(f"{icon} {label}")
+            btn.setFixedHeight(30)
+            toolbar.addWidget(btn)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
 
-        self.settings = load_settings()
-        self.current_file = None
-        self.project_root = PROJECTS_DIR
+        splitter = QSplitter(Qt.Horizontal)
+        self.model = QFileSystemModel()
+        self.model.setRootPath(self.project_path)
 
-        self.create_topbar()
-        self.create_main_layout()
-        self.create_bottom_console()
-        self.create_context_menu()
-        self.apply_settings()
+        self.tree = QTreeView()
+        self.tree.setModel(self.model)
+        self.tree.setRootIndex(self.model.index(self.project_path))
+        self.tree.doubleClicked.connect(self.open_file_from_tree)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.show_context_menu)
 
-    def create_topbar(self):
-        topbar = tk.Frame(self.root, height=40)
-        topbar.pack(side=tk.TOP, fill=tk.X)
-
-        tk.Button(topbar, text="📂 Open Project", command=self.open_project).pack(side=tk.LEFT, padx=5, pady=5)
-        tk.Button(topbar, text="🆕 Create Project", command=self.create_project).pack(side=tk.LEFT, padx=5, pady=5)
-        tk.Button(topbar, text="💾 Save", command=self.save_file).pack(side=tk.LEFT, padx=5, pady=5)
-        tk.Button(topbar, text="▶ Run", command=self.run_code).pack(side=tk.LEFT, padx=5, pady=5)
-        tk.Button(topbar, text="📦 Build APK", command=self.build_apk).pack(side=tk.LEFT, padx=5, pady=5)
-        tk.Button(topbar, text="⚙ Settings", command=self.open_settings).pack(side=tk.RIGHT, padx=5, pady=5)
-
-        self.mode_var = tk.StringVar(value="Python")
-        ttk.Combobox(topbar, textvariable=self.mode_var, values=["Python", "Kotlin/XML"], width=15).pack(side=tk.RIGHT, padx=5)
-
-    def create_main_layout(self):
-        main_frame = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashwidth=4)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.project_tree = ttk.Treeview(main_frame)
-        self.project_tree.heading("#0", text="Project", anchor=tk.W)
-        self.project_tree.bind("<Button-3>", self.show_context_menu)
-        self.project_tree.bind("<Double-1>", self.open_file_in_editor)
-        main_frame.add(self.project_tree, width=250)
-
-        editor_frame = tk.Frame(main_frame)
-        self.editor = tk.Text(editor_frame, wrap="none")
-        self.editor.pack(fill=tk.BOTH, expand=True)
-        main_frame.add(editor_frame, width=600)
-
-        self.preview_frame = tk.LabelFrame(main_frame, text="Preview")
-        self.preview_frame.pack_propagate(False)
-        self.preview_content = tk.Frame(self.preview_frame)
-        self.preview_content.pack(fill=tk.BOTH, expand=True)
-        main_frame.add(self.preview_frame, width=400)
-
-    def create_bottom_console(self):
-        console_frame = tk.Frame(self.root, height=120)
-        console_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        tk.Label(console_frame, text="Console Output:").pack(anchor="w")
-        self.console = tk.Text(console_frame, height=6)
-        self.console.pack(fill=tk.BOTH, expand=True)
-
-    def create_context_menu(self):
-        self.context_menu = tk.Menu(self.root, tearoff=0)
-        self.context_menu.add_command(label="Create File", command=lambda: self.create_item(True))
-        self.context_menu.add_command(label="Create Folder", command=lambda: self.create_item(False))
-        self.context_menu.add_command(label="Delete", command=self.delete_item)
-
-    def show_context_menu(self, event):
-        item = self.project_tree.identify_row(event.y)
-        if item:
-            self.project_tree.selection_set(item)
-            self.context_menu.post(event.x_root, event.y_root)
-
-    def open_project(self):
-        folder = filedialog.askdirectory(initialdir=PROJECTS_DIR)
-        if folder:
-            self.project_root = folder
-            self.load_project()
-
-    def create_project(self):
-        name = simpledialog.askstring("Create Project", "Enter project name:")
-        if name:
-            new_path = os.path.join(PROJECTS_DIR, name)
-            os.makedirs(new_path, exist_ok=True)
-            self.project_root = new_path
-            self.load_project()
-
-    def load_project(self):
-        self.project_tree.delete(*self.project_tree.get_children())
-        if os.path.isdir(self.project_root):
-            self.insert_tree_nodes("", self.project_root)
-
-    def insert_tree_nodes(self, parent, path):
-        node = self.project_tree.insert(parent, "end", text=os.path.basename(path), open=True)
-        if os.path.isdir(path):
-            for item in sorted(os.listdir(path)):
-                self.insert_tree_nodes(node, os.path.join(path, item))
-
-    def get_path(self, item):
-        parts = []
-        while item:
-            parts.insert(0, self.project_tree.item(item, "text"))
-            item = self.project_tree.parent(item)
-        return os.path.join(self.project_root, *parts[1:])  # skip root name
-
-    def create_item(self, is_file):
-        selected = self.project_tree.selection()
-        if not selected: return
-        parent_path = self.get_path(selected[0])
-        if not os.path.isdir(parent_path):
-            parent_path = os.path.dirname(parent_path)
-        name = simpledialog.askstring("Create", "Enter name:")
-        if not name: return
-        new_path = os.path.join(parent_path, name + (".py" if is_file else ""))
-        if is_file:
-            open(new_path, "w").close()
+        if self.theme == "dark":
+            tree_style = "background-color: #2b2b2b; color: white;"
+            tab_style = '''
+                QTabBar::tab {
+                    height: 24px;
+                    padding: 6px;
+                    font-weight: bold;
+                    font-family: Consolas;
+                    background: #3c3f41;
+                    color: white;
+                }
+                QTabBar::tab:selected {
+                    background: #555;
+                    color: #fff;
+                    border-bottom: 2px solid #ffaa00;
+                }
+            '''
+            self.editor_style = "background-color: #1e1e1e; color: #ffffff; padding: 10px;"
         else:
-            os.makedirs(new_path, exist_ok=True)
-        self.load_project()
+            tree_style = "background-color: #f0f0f0; color: black;"
+            tab_style = '''
+                QTabBar::tab {
+                    height: 24px;
+                    padding: 6px;
+                    font-weight: bold;
+                    font-family: Consolas;
+                    background: #e0e0e0;
+                    color: black;
+                }
+                QTabBar::tab:selected {
+                    background: #ccc;
+                    color: #000;
+                    border-bottom: 2px solid #007acc;
+                }
+            '''
+            self.editor_style = "background-color: #ffffff; color: #000000; padding: 10px;"
 
-    def delete_item(self):
-        selected = self.project_tree.selection()
-        if not selected: return
-        path = self.get_path(selected[0])
-        if messagebox.askyesno("Delete", f"Delete {path}?"):
+        self.tree.setStyleSheet(tree_style)
+        splitter.addWidget(self.tree)
+
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(tab_style)
+        splitter.addWidget(self.tabs)
+        splitter.setSizes([250, 800])
+        layout.addWidget(splitter)
+
+        bottom = QLabel("No problems found.")
+        bottom.setStyleSheet("padding: 6px; background-color: #444; color: white;")
+        layout.addWidget(bottom)
+
+        toolbar.itemAt(0).widget().clicked.connect(self.run_project)
+        toolbar.itemAt(1).widget().clicked.connect(self.build_project)
+        toolbar.itemAt(2).widget().clicked.connect(self.save_current_file)
+        toolbar.itemAt(3).widget().clicked.connect(self.debug_project)
+
+    def open_file_from_tree(self, index):
+        if not self.model.isDir(index):
+            filepath = self.model.filePath(index)
+            filename = os.path.basename(filepath)
+            if filename in self.open_tabs:
+                self.tabs.setCurrentWidget(self.open_tabs[filename])
+            else:
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except Exception as e:
+                    content = f"Error opening file: {e}"
+                editor = QTextEdit()
+                editor.setText(content)
+                editor.setFontFamily("Consolas")
+                editor.setStyleSheet(self.editor_style)
+                self.tabs.addTab(editor, filename)
+                self.tabs.setCurrentWidget(editor)
+                self.open_tabs[filename] = editor
+
+    def save_current_file(self):
+        index = self.tabs.currentIndex()
+        if index == -1:
+            return
+        editor = self.tabs.currentWidget()
+        filename = self.tabs.tabText(index)
+        filepath = os.path.join(self.project_path, filename)
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(editor.toPlainText())
+        except Exception:
+            QMessageBox.critical(self, "Error", "Could not save file.")
+
+    def run_project(self):
+        main_file = os.path.join(self.project_path, "main.py")
+        if os.path.exists(main_file):
+            subprocess.Popen(["python", main_file], cwd=self.project_path)
+        else:
+            QMessageBox.warning(self, "Run", "main.py not found.")
+
+    def build_project(self):
+        QMessageBox.information(self, "Build", "Build successful (placeholder).")
+
+    def debug_project(self):
+        main_file = os.path.join(self.project_path, "main.py")
+        if os.path.exists(main_file):
+            subprocess.Popen(["python", "-m", "pdb", main_file], cwd=self.project_path)
+        else:
+            QMessageBox.warning(self, "Debug", "main.py not found.")
+
+    def show_context_menu(self, position):
+        index = self.tree.indexAt(position)
+        if not index.isValid():
+            return
+        menu = QMenu()
+        new_action = QAction("New File", self)
+        delete_action = QAction("Delete", self)
+        rename_action = QAction("Rename", self)
+        new_action.triggered.connect(lambda: self.new_file(index))
+        delete_action.triggered.connect(lambda: self.delete_item(index))
+        rename_action.triggered.connect(lambda: self.rename_item(index))
+        menu.addAction(new_action)
+        menu.addAction(delete_action)
+        menu.addAction(rename_action)
+        menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+    def new_file(self, index):
+        dir_path = self.model.filePath(index)
+        if not os.path.isdir(dir_path):
+            dir_path = os.path.dirname(dir_path)
+        name, ok = QInputDialog.getText(self, "New File", "Enter file name:")
+        if ok and name:
+            full_path = os.path.join(dir_path, name)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write("")
+            self.tree.setRootIndex(self.model.index(self.project_path))
+
+    def delete_item(self, index):
+        path = self.model.filePath(index)
+        confirm = QMessageBox.question(self, "Delete", f"Delete {os.path.basename(path)}?")
+        if confirm == QMessageBox.Yes:
             if os.path.isdir(path):
                 shutil.rmtree(path)
-            elif os.path.exists(path):
-                os.remove(path)
-            self.load_project()
-
-    def open_file_in_editor(self, event):
-        selected = self.project_tree.selection()
-        if not selected: return
-        path = self.get_path(selected[0])
-        if os.path.isfile(path) and path.endswith(".py"):
-            self.current_file = path
-            with open(path, "r", encoding="utf-8") as f:
-                self.editor.delete("1.0", tk.END)
-                self.editor.insert("1.0", f.read())
-
-    def save_file(self):
-        if self.current_file:
-            with open(self.current_file, "w", encoding="utf-8") as f:
-                f.write(self.editor.get("1.0", tk.END))
-
-    def run_code(self):
-        if not self.current_file:
-            default = self.settings.get("default_run_file", "")
-            if default and os.path.exists(default):
-                self.current_file = default
             else:
-                messagebox.showerror("Error", "No file opened and no default run file set.")
-                return
+                os.remove(path)
+            self.tree.setRootIndex(self.model.index(self.project_path))
 
-        if self.settings.get("auto_save_on_run", True):
-            self.save_file()
+    def rename_item(self, index):
+        path = self.model.filePath(index)
+        name, ok = QInputDialog.getText(self, "Rename", "Enter new name:", text=os.path.basename(path))
+        if ok and name:
+            new_path = os.path.join(os.path.dirname(path), name)
+            os.rename(path, new_path)
+            self.tree.setRootIndex(self.model.index(self.project_path))
 
-        self.console.delete("1.0", tk.END)
-        for w in self.preview_content.winfo_children():
-            w.destroy()
 
-        stdout_redirect = RedirectStdout(self.console)
-        old_stdout = sys.stdout
-        sys.stdout = stdout_redirect
+class App(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Welcome to Android Studio")
+        self.setMinimumSize(1080, 650)
+        self.theme = "dark"
+        self.ensure_required_folders()
+        self.init_ui()
 
-        try:
-            code = open(self.current_file, "r", encoding="utf-8").read()
+    def ensure_required_folders(self):
+        for folder in ["projects", "utils"]:
+            os.makedirs(folder, exist_ok=True)
 
-            def custom_tk(): return self.preview_content
-            fake_tk = types.SimpleNamespace(
-                Tk=custom_tk,
-                Frame=lambda *a, **k: tk.Frame(self.preview_content, *a, **k),
-                Button=lambda *a, **k: tk.Button(self.preview_content, *a, **k),
-                Label=lambda *a, **k: tk.Label(self.preview_content, *a, **k),
-                Text=lambda *a, **k: tk.Text(self.preview_content, *a, **k),
-                Entry=lambda *a, **k: tk.Entry(self.preview_content, *a, **k)
-            )
+    def init_ui(self):
+        self.main_layout = QHBoxLayout(self)
+        sidebar_layout = QVBoxLayout()
+        sidebar_layout.setContentsMargins(20, 20, 10, 20)
+        sidebar_layout.setSpacing(15)
 
-            exec(code, {"__builtins__": __builtins__, "__name__": "__main__", "tk": fake_tk})
-            print("✅ Code executed successfully!")
+        logo = QLabel("🪶➰")
+        logo.setFont(QFont("Arial", 28))
+        studio_label = QLabel("Simplic Editor")
+        studio_label.setFont(QFont("Arial", 14, QFont.Bold))
+        version_label = QLabel("Unknown Studios SE.A1.2025")
+        version_label.setFont(QFont("Arial", 9))
+        version_label.setStyleSheet("color: #aaa;")
 
-        except Exception as e:
-            print(f"❌ Error: {e}")
-        finally:
-            sys.stdout = old_stdout
+        sidebar_layout.addWidget(logo)
+        sidebar_layout.addWidget(studio_label)
+        sidebar_layout.addWidget(version_label)
+        sidebar_layout.addSpacing(20)
 
-    def build_apk(self):
-        if not self.current_file:
-            messagebox.showerror("Error", "Open a project first.")
-            return
-        project_dir = os.path.dirname(self.current_file)
-        gradle_dir = os.path.join(project_dir, "AndroidProject")
-        os.makedirs(os.path.join(gradle_dir, "app", "src", "main", "java", "com", "example", "app"), exist_ok=True)
-        os.makedirs(os.path.join(gradle_dir, "app", "src", "main", "res", "layout"), exist_ok=True)
+        self.nav_list = QListWidget()
+        self.nav_list.addItems(["Projects", "Customize", "Libraries", "Know More"])
+        self.nav_list.setCurrentRow(0)
+        self.nav_list.setFixedWidth(180)
+        self.nav_list.currentRowChanged.connect(self.switch_tab)
+        sidebar_layout.addWidget(self.nav_list)
+        sidebar_layout.addStretch()
+        self.main_layout.addLayout(sidebar_layout)
 
-        manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.app">
-    <application android:label="MyApp">
-        <activity android:name=".MainActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>"""
-        with open(os.path.join(gradle_dir, "app", "src", "main", "AndroidManifest.xml"), "w") as f:
-            f.write(manifest)
+        self.stack_layout = QStackedLayout()
+        self.current_widget = QWidget()
 
-        activity = """package com.example.app;
-import android.os.Bundle;
-import androidx.appcompat.app.AppCompatActivity;
-import com.chaquo.python.Python;
-import com.chaquo.python.PyObject;
-import android.widget.TextView;
-public class MainActivity extends AppCompatActivity {
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        Python py = Python.getInstance();
-        PyObject pyObj = py.getModule("main").callAttr("run");
-        TextView tv = findViewById(R.id.myText);
-        tv.setText(pyObj.toString());
-    }
-}"""
-        with open(os.path.join(gradle_dir, "app", "src", "main", "java", "com", "example", "app", "MainActivity.java"), "w") as f:
-            f.write(activity)
+        self.projects_tab = QWidget()
+        proj_layout = QVBoxLayout()
+        top_row = QHBoxLayout()
 
-        layout = """<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-    <Button android:id="@+id/myButton" android:text="Click Me"
-        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-    <TextView android:id="@+id/myText" android:text="Waiting..."
-        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
-</LinearLayout>"""
-        with open(os.path.join(gradle_dir, "app", "src", "main", "res", "layout", "activity_main.xml"), "w") as f:
-            f.write(layout)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search projects")
+        top_row.addWidget(self.search)
 
-        messagebox.showinfo("Build APK", f"Gradle project created at:\n{gradle_dir}")
+        self.new_btn = QPushButton("New Project")
+        self.new_btn.clicked.connect(self.create_project)
+        top_row.addWidget(self.new_btn)
 
-    def open_settings(self):
-        win = tk.Toplevel(self.root)
-        win.title("Settings")
-        win.geometry("350x400")
+        self.open_btn = QPushButton("Open")
+        self.open_btn.clicked.connect(self.open_folder)
+        top_row.addWidget(self.open_btn)
 
-        tk.Label(win, text="⚙ Settings", font=("Arial", 14)).pack(pady=10)
+        self.clone_btn = QPushButton("Clone Repository")
+        self.clone_btn.clicked.connect(self.clone_repository)
+        top_row.addWidget(self.clone_btn)
 
-        theme_var = tk.StringVar(value=self.settings["theme"])
-        tk.Label(win, text="Theme:").pack(anchor="w", padx=20)
-        tk.OptionMenu(win, theme_var, "Dark", "Light").pack(anchor="w", padx=20)
+        proj_layout.addLayout(top_row)
+        self.project_label = QLabel("Projects in /projects:")
+        proj_layout.addWidget(self.project_label)
 
-        font_size_var = tk.IntVar(value=self.settings["font_size"])
-        tk.Label(win, text="Font Size:").pack(anchor="w", padx=20)
-        tk.Spinbox(win, from_=8, to=30, textvariable=font_size_var).pack(anchor="w", padx=20)
+        self.project_view = QTreeView()
+        self.project_model = QFileSystemModel()
+        self.project_model.setRootPath("projects")
+        self.project_view.setModel(self.project_model)
+        self.project_view.setRootIndex(self.project_model.index("projects"))
+        self.project_view.setColumnHidden(1, True)
+        self.project_view.setColumnHidden(2, True)
+        self.project_view.setColumnHidden(3, True)
+        proj_layout.addWidget(self.project_view)
 
-        auto_save_var = tk.BooleanVar(value=self.settings["auto_save_on_run"])
-        tk.Checkbutton(win, text="Auto-Save on Run", variable=auto_save_var).pack(anchor="w", padx=20)
+        self.projects_tab.setLayout(proj_layout)
+        self.stack_layout.addWidget(self.projects_tab)
 
-        def apply():
-            self.settings.update({
-                "theme": theme_var.get(),
-                "font_size": font_size_var.get(),
-                "auto_save_on_run": auto_save_var.get()
-            })
-            save_settings(self.settings)
-            self.apply_settings()
-            win.destroy()
+        customize_tab = QWidget()
+        customize_layout = QVBoxLayout()
+        self.theme_btn = QPushButton("Switch to Light Theme")
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        customize_layout.addWidget(self.theme_btn)
+        customize_layout.addStretch()
+        customize_tab.setLayout(customize_layout)
+        self.stack_layout.addWidget(customize_tab)
 
-        tk.Button(win, text="💾 Save", command=apply).pack(pady=20)
+        libraries_tab = QWidget()
+        lib_layout = QVBoxLayout()
+        lib_label = QLabel("Installed Python Libraries:")
+        lib_layout.addWidget(lib_label)
+        for lib in ["numpy", "pandas", "matplotlib", "PyQt5", "requests", "flask", "django"]:
+            lib_layout.addWidget(QLabel(f"• {lib}"))
+        libraries_tab.setLayout(lib_layout)
+        self.stack_layout.addWidget(libraries_tab)
 
-    def apply_settings(self):
-        self.editor.config(font=("Consolas", self.settings["font_size"]))
-        self.console.config(font=("Consolas", self.settings["font_size"] - 2))
-        if self.settings["theme"] == "Light":
-            self.set_light_theme()
+        empty_tab = QWidget()
+        empty_tab.setLayout(QVBoxLayout())
+        self.stack_layout.addWidget(empty_tab)
+
+        self.current_widget.setLayout(self.stack_layout)
+        self.main_layout.addWidget(self.current_widget)
+        self.apply_dark_theme()
+
+    def switch_tab(self, index):
+        self.stack_layout.setCurrentIndex(index)
+
+    def create_project(self):
+        name, ok = QFileDialog.getSaveFileName(self, "New Project Name", "projects/", "")
+        if ok and name:
+            folder_name = os.path.basename(name)
+            full_path = os.path.join("projects", folder_name)
+            os.makedirs(full_path, exist_ok=True)
+            open(os.path.join(full_path, "outputs"), "w").close()
+            self.project_view.setRootIndex(self.project_model.index("projects"))
+
+    def open_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Project Folder", "projects/")
+        if folder:
+            self.load_project_view(folder)
+
+    def load_project_view(self, path):
+        while self.main_layout.count():
+            item = self.main_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+        editor = ProjectEditor(path, self.theme)
+        self.main_layout.addWidget(editor)
+        self.setWindowTitle(f"{os.path.basename(path)} - Android Studio")
+
+    def clone_repository(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Clone Repository")
+        dlg.setMinimumSize(500, 250)
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Version control:"))
+        version_select = QComboBox()
+        version_select.addItems(["Git"])
+        layout.addWidget(version_select)
+
+        layout.addWidget(QLabel("URL:"))
+        url_field = QLineEdit()
+        layout.addWidget(url_field)
+
+        layout.addWidget(QLabel("Directory:"))
+        dir_field = QLineEdit("projects/")
+        layout.addWidget(dir_field)
+
+        shallow = QCheckBox("Shallow clone with a history truncated to 1 commit")
+        layout.addWidget(shallow)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        dlg.setLayout(layout)
+        dlg.exec_()
+
+    def toggle_theme(self):
+        if self.theme == "dark":
+            self.apply_light_theme()
+            self.theme = "light"
+            self.theme_btn.setText("Switch to Dark Theme")
         else:
-            self.set_dark_theme()
+            self.apply_dark_theme()
+            self.theme = "dark"
+            self.theme_btn.setText("Switch to Light Theme")
 
-    def set_dark_theme(self):
-        colors = {"bg": "#1E1E1E", "fg": "white"}
-        self.root.config(bg=colors["bg"])
-        self.editor.config(bg=colors["bg"], fg=colors["fg"], insertbackground="white")
-        self.console.config(bg=colors["bg"], fg=colors["fg"])
-        self.preview_frame.config(bg="#252526", fg="white")
-        self.preview_content.config(bg=colors["bg"])
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview", background=colors["bg"], fieldbackground=colors["bg"], foreground="white")
+    def apply_dark_theme(self):
+        self.setStyleSheet("background-color: #2b2b2b; color: white;")
+        self.project_view.setStyleSheet("background-color: #3c3f41; color: white;")
 
-    def set_light_theme(self):
-        colors = {"bg": "white", "fg": "black"}
-        self.root.config(bg=colors["bg"])
-        self.editor.config(bg=colors["bg"], fg=colors["fg"], insertbackground="black")
-        self.console.config(bg=colors["bg"], fg=colors["fg"])
-        self.preview_frame.config(bg="#E0E0E0", fg="black")
-        self.preview_content.config(bg=colors["bg"])
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview", background=colors["bg"], fieldbackground=colors["bg"], foreground="black")
+    def apply_light_theme(self):
+        self.setStyleSheet("background-color: #ffffff; color: black;")
+        self.project_view.setStyleSheet("background-color: #f0f0f0; color: black;")
+
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AndroidStudioLikeIDE(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = App()
+    window.show()
+    sys.exit(app.exec_())
